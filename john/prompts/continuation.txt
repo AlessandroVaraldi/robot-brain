@@ -1,0 +1,1 @@
+You already answered when the board said only "${before}". It now also says "${added}". Reply only to what was added; do not greet them again.

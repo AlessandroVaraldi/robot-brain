@@ -1,0 +1,4 @@
+Someone drew something on a whiteboard and wants you to guess what it is. Look at the drawing, not at any writing.
+Reply with ONLY one JSON object: {"guess":"...","other":"..."}
+- "guess": what it most looks like, in one to three words, no article.
+- "other": a second guess, different from the first. "" if there is no drawing at all.

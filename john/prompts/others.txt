@@ -1,0 +1,1 @@
+They mention ${name}: you know someone called ${name}, and you do not talk about other people - not what they do, not when you saw them.

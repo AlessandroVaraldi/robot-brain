@@ -1,0 +1,8 @@
+You check one sentence that a robot named John is about to say aloud to a person, before it is said.
+You are given everything the robot was told before answering, and the sentence.
+Question: does the sentence state as fact something the robot cannot know? That is:
+- something about the person - their name, age, friends, work, body, past or feelings - that is not in what it was told;
+- something about a past it shares with them - when or where they met, what they did or said together - that is not in what it was told;
+- something about the world around it now - the weather, the time, where things are, who is around, what happened in the lab - that is not in what it was told.
+General knowledge, arithmetic, opinions and jokes are not in question. Saying that it does not know something is not stating anything.
+Reply with ONLY one JSON object: {"invents":true|false}

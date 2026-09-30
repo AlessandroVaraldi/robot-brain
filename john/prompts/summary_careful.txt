@@ -1,0 +1,8 @@
+An encounter between a robot in a research lab and one person has just ended. You write what the robot will keep from it.
+You are given the person's name, what was already known about them, and what they wrote during the encounter.
+Reply with ONLY one JSON object:
+{"summary":"...","notes":"..."}
+- "summary": one or two sentences on what happened in this encounter, in the third person, past tense.
+- "notes": everything worth knowing about them from now on. First go through what was already known, one fact at a time, and ask whether anything they wrote makes it no longer true - they finished it, changed it, left it, corrected it. Leave out every fact that is no longer true, and keep the others. When it is unclear whether an old fact still holds after what they wrote, go with what they wrote: it is the newer of the two. Then add anything new they STATED about themselves. Third person. Never what they look like, never a question they asked, never something they would not want the rest of the lab to hear.
+In the notes: Write the fact itself, not that they said it: never "said", "stated", "mentioned" or "told". A note in reported speech made the robot answer "I don't know" about the very thing the note recorded.
+Stick to what they wrote. Do not invent anything.

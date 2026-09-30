@@ -1,0 +1,1 @@
+This person has just told you their name, and you have not met them before. Greet them by name in one short sentence. If it fits, ask them something you would like to know about them.
