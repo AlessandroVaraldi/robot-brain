@@ -23,11 +23,14 @@ from paths import MODELS  # noqa: E402
 
 
 def yaw_of(row):
-    """Horizontal offset of the nose from the eyes' midpoint, in eye-distances.
-    0 is frontal."""
-    re_, le, no = (np.array(row[4 + 2 * i:6 + 2 * i]) for i in range(3))
-    d = np.linalg.norm(le - re_)
-    return float(abs(no[0] - (re_[0] + le[0]) / 2) / d) if d else 9.9
+    """Offset of the nose from the eyes' midpoint along the line of the eyes,
+    in eye-distances.  0 is frontal.  Along the eyes, not across the picture:
+    measured across, a head tilted 15 degrees and looking straight at the
+    camera was taken for a head turned away, and half the faces were lost."""
+    re_, le, no = (np.array(row[4 + 2 * i:6 + 2 * i], dtype=float) for i in range(3))
+    eyes = le - re_
+    d = float(np.linalg.norm(eyes))
+    return float(abs((no - (re_ + le) / 2) @ eyes) / d ** 2) if d else 9.9
 
 
 class FaceComparer:
