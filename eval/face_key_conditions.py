@@ -4,26 +4,35 @@ or a camera would change them, through the whole path (YuNet, SFace and its
 frontal filter, the locks).
 
 Half of the people with four frontal photos or more are enrolled from their
-first two photos, untouched; the other half never are. Then photos 3 and 4 of
-everyone are changed the same way and handed over as a pair, as the robot
-hands over two frames:
+first two photos, untouched; the other half never are. Their further photos
+(3 to 7) are changed the same way, and handed over two at a time, as the
+robot hands over two frames:
 
-  found       both photos still give a frontal face large enough to use
-  recognised  enrolled people recognised as themselves (of all their pairs)
-  wrong       enrolled people taken for someone else
-  strangers   pairs of the never-enrolled recognised as someone
+  found       photos 3 and 4 both still give a frontal face large enough
+  pair        enrolled people recognised from photos 3 and 4
+  visit       ... from some consecutive pair of photos 3 to 7, as a visit
+              with several frames would be
+  wrong       enrolled people taken for someone else (any pair)
+  strangers   never-enrolled people recognised as someone (any pair)
 
 Declared before running: one stop darker (a cloudy day) loses at most 5
 points of recognition against the untouched photos, and no change makes a
 stranger or the wrong person recognised.
 
     python3 eval/face_key_conditions.py
+    python3 eval/face_key_conditions.py --only light
+
+CPU-heavy: run it on a machine of your own, not a shared server.
 """
 
+import argparse
+import hashlib
+import json
 import os
 import random
 import sys
 import tempfile
+import zlib
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -91,59 +100,97 @@ def changed(path, name, seed):
     return buf.tobytes()
 
 
+LIGHT = ("1 stop darker", "2 stops darker", "3 stops darker", "overexposed", "low contrast",
+         "light from one side", "dim and noisy", "noise")
+
+
 def embed(job):
     global _fc
+    path, name, seed = job
     if _fc is None:
         import cv2
         cv2.setNumThreads(1)          # one process per core already
         from face_compare import FaceComparer
         _fc = FaceComparer()
-    path, name, seed = job
     vec = _fc.analyse(changed(path, name, seed))["vec"]
     return None if vec is None else np.asarray(vec, np.float32).ravel()
 
 
-def main():
-    from face_key.chip import SoftChip
-    from face_key.store import FaceKeys, admin_keypair
-
+def frontal_people():
+    """name -> frontal photos, untouched; cached, keyed by
+    the face code that decides what is frontal."""
+    code = (HERE.parent / "john" / "face_compare.py").read_bytes()
+    cache = HERE / "suite_out" / f"lfw_frontal_{hashlib.sha256(code).hexdigest()[:10]}.json"
+    if cache.exists():
+        return json.loads(cache.read_text())
     files = sorted((LFW / "lfw").glob("*/*.jpg"))
     with ProcessPoolExecutor(WORKERS) as ex:
-        base = list(ex.map(embed, [(f, "untouched", 0) for f in files], chunksize=64))
+        vecs = list(ex.map(embed, [(f, "untouched", 0) for f in files], chunksize=64))
     by = {}
-    for f, v in zip(files, base):
+    for f, v in zip(files, vecs):
         if v is not None:
-            by.setdefault(f.parent.name, []).append((f, v))
-    print(f"LFW: {len(files)} photos, {sum(map(len, by.values()))} frontal and large enough "
-          f"({sum(map(len, by.values())) / len(files):.0%}); the others never reach the locks")
-    people = sorted(n for n, ph in by.items() if len(ph) >= 4)
-    random.Random(0).shuffle(people)
-    enrolled, strangers = people[::2], people[1::2]
+            by.setdefault(f.parent.name, []).append(str(f))
+    cache.parent.mkdir(exist_ok=True)
+    cache.write_text(json.dumps(by))
+    print(f"LFW: {len(files)} photos, {sum(map(len, by.values()))} frontal and large enough")
+    return by
 
-    with tempfile.TemporaryDirectory() as tmp:
+
+def run(by, people, enrolled, strangers, conditions):
+    from face_key.chip import SoftChip
+    from face_key.store import FaceKeys, admin_keypair
+    with tempfile.TemporaryDirectory() as tmp, ProcessPoolExecutor(WORKERS) as ex:
         keys = FaceKeys(SoftChip(key=os.urandom(32), burst=10**9), admin_keypair()[1],
                         Path(tmp) / "faces.sqlite")
         keys.REFRESH_AFTER_S = float("inf")
-        ids = {n: keys.enrol([v for _, v in by[n][:2]], n).id for n in enrolled}
-        print(f"enrolled {len(enrolled)}, strangers {len(strangers)}; probes: photos 3 and 4\n")
-        print(f"{'condition':22} {'found':>7} {'recognised':>11} {'wrong':>6} {'strangers':>10}")
-        for name in CONDITIONS:
-            jobs = [(by[n][i][0], name, hash((n, i)) % 2**31) for n in people for i in (2, 3)]
-            with ProcessPoolExecutor(WORKERS) as ex:
-                vecs = list(ex.map(embed, jobs, chunksize=16))
-            pair = {n: (vecs[2 * k], vecs[2 * k + 1]) for k, n in enumerate(people)}
-            found = sum(a is not None and b is not None for a, b in pair.values())
-            right = wrong = accepted = 0
-            for n in enrolled:
-                a, b = pair[n]
-                got = keys.recognise([a, b]) if a is not None and b is not None else None
-                right += bool(got and got.id == ids[n])
-                wrong += bool(got and got.id != ids[n])
+        enrol = list(ex.map(embed, [(by[n][i], "untouched", 0)
+                                    for n in enrolled for i in (0, 1)], chunksize=16))
+        ids = {}
+        for k, n in enumerate(enrolled):
+            pair = [v for v in enrol[2 * k:2 * k + 2] if v is not None]
+            if len(pair) == 2:
+                ids[n] = keys.enrol(pair, n).id
+        print(f"\nenrolled {len(ids)} of {len(enrolled)}, strangers {len(strangers)}")
+        print(f"{'condition':22} {'found':>6} {'pair':>7} {'visit':>7} {'wrong':>6} {'strangers':>10}")
+        pairs = {}
+        for name in conditions:
+            jobs = [(by[n][i], name, zlib.crc32(f"{n}:{i}".encode()))
+                    for n in people for i in range(2, min(7, len(by[n])))]
+            vecs = iter(ex.map(embed, jobs, chunksize=16))
+            probes = {n: [next(vecs) for _ in range(2, min(7, len(by[n])))] for n in people}
+
+            def opens(a, b):
+                return keys.recognise([a, b]) if a is not None and b is not None else None
+            found = sum(p[0] is not None and p[1] is not None for p in probes.values())
+            pair = visit = wrong = accepted = 0
+            for n in ids:
+                p = probes[n]
+                got = [opens(a, b) for a, b in zip(p, p[1:])]
+                pair += bool(got[0] and got[0].id == ids[n])
+                visit += any(g and g.id == ids[n] for g in got)
+                wrong += sum(bool(g and g.id != ids[n]) for g in got)
             for n in strangers:
-                a, b = pair[n]
-                accepted += bool(a is not None and b is not None and keys.recognise([a, b]))
-            print(f"{name:22} {found / len(people):>7.0%} {right / len(enrolled):>11.1%} "
-                  f"{wrong:>6} {accepted:>10}", flush=True)
+                p = probes[n]
+                accepted += sum(bool(opens(a, b)) for a, b in zip(p, p[1:]))
+            pairs[name] = pair / len(ids)
+            print(f"{name:22} {found / len(people):>6.0%} {pair / len(ids):>7.1%} "
+                  f"{visit / len(ids):>7.1%} {wrong:>6} {accepted:>10}", flush=True)
+        light_ones = [pairs[c] for c in LIGHT if c in pairs]
+        if light_ones:
+            print(f"mean pair recognition over the {len(light_ones)} light conditions: "
+                  f"{np.mean(light_ones):.1%}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--only", choices=["light"], help="untouched and the light conditions only")
+    a = ap.parse_args()
+    conditions = ["untouched", *LIGHT] if a.only == "light" else list(CONDITIONS)
+    by = frontal_people()
+    people = sorted(n for n, ph in by.items() if len(ph) >= 4)
+    random.Random(0).shuffle(people)
+    enrolled, strangers = people[::2], people[1::2]
+    run(by, people, enrolled, strangers, conditions)
 
 
 if __name__ == "__main__":
