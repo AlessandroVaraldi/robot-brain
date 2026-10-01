@@ -20,7 +20,6 @@ stranger or the wrong person recognised.
     python3 eval/face_key_conditions.py
 """
 
-import io
 import os
 import random
 import sys
@@ -34,6 +33,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "john"))
 sys.path.insert(0, str(HERE.parent / "pi"))
 from paths import LFW  # noqa: E402
+
+# Leave room for everything else on the machine (on a shared server, run it elsewhere).
+WORKERS = max(1, (os.cpu_count() or 2) - 2)
 
 _fc = None
 
@@ -106,7 +108,7 @@ def main():
     from face_key.store import FaceKeys, admin_keypair
 
     files = sorted((LFW / "lfw").glob("*/*.jpg"))
-    with ProcessPoolExecutor(16) as ex:
+    with ProcessPoolExecutor(WORKERS) as ex:
         base = list(ex.map(embed, [(f, "untouched", 0) for f in files], chunksize=64))
     by = {}
     for f, v in zip(files, base):
@@ -127,7 +129,7 @@ def main():
         print(f"{'condition':22} {'found':>7} {'recognised':>11} {'wrong':>6} {'strangers':>10}")
         for name in CONDITIONS:
             jobs = [(by[n][i][0], name, hash((n, i)) % 2**31) for n in people for i in (2, 3)]
-            with ProcessPoolExecutor(16) as ex:
+            with ProcessPoolExecutor(WORKERS) as ex:
                 vecs = list(ex.map(embed, jobs, chunksize=16))
             pair = {n: (vecs[2 * k], vecs[2 * k + 1]) for k, n in enumerate(people)}
             found = sum(a is not None and b is not None for a, b in pair.values())
