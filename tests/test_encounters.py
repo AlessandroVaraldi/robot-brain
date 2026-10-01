@@ -272,6 +272,37 @@ def test_returning_face_is_recognised_and_greeted():
 
 
 @case
+def test_a_dark_face_is_tried_again_with_the_light_evened_out():
+    mind, store, models, clock = setup(timeout_s=5)
+    meet(mind, clock, "Alessandro", V)
+    silence(mind, clock, 8)
+    clock.advance(86400)
+    dark = ("face-V in the dark", V)                 # as seen opens nothing; evened out does
+    say(mind, clock, "", vec=dark)
+    act = say(mind, clock, "", vec=dark)
+    assert act["text"].startswith("welcome back (You have met Alessandro"), act
+    return "as seen: nobody; light evened out: Alessandro"
+
+
+@case
+def test_enrolment_uses_the_frames_as_seen():
+    mind, store, models, clock = setup(timeout_s=5)
+    both = (V, "face-V evened out")
+    arrive(mind, clock, both)
+    say(mind, clock, "MY NAME IS ALESSANDRO", vec=both)
+    act = say(mind, clock, "YES", vec=both)
+    assert act["text"] == SAY["remembered"].format(name="Alessandro") and V in mind.faces.people, act
+    mind2, *_ = setup(timeout_s=5)
+    only_evened = (None, "face-M evened out")
+    arrive(mind2, clock, only_evened)
+    say(mind2, clock, "MY NAME IS MARIA", vec=only_evened)
+    act = say(mind2, clock, "YES", vec=only_evened)
+    assert act["text"] == SAY["remembered"].format(name="Maria"), act
+    assert "face-M evened out" in mind2.faces.people
+    return "enrolled from the frames as seen; evened out only when those have no face"
+
+
+@case
 def test_next_person_gets_nothing_of_the_previous():
     mind, store, models, clock = setup(timeout_s=5)
     meet(mind, clock, "Alessandro", V, "I AM BUILDING A ROBOT ARM")
@@ -501,7 +532,7 @@ def test_debug_shows_what_is_kept_encrypted():
     back_next_day(mind, clock, V)
     said = [e[1] for e in mind.log if e[0] == "debug"]
     wanted = ("enrolled Alessandro", "notes were '', now 'They are building a robot arm.'",
-              "face opened Alessandro's lock", "3 of 56 face bits", "memory for the prompt")
+              "face as seen opened Alessandro's lock", "3 of 56 face bits", "memory for the prompt")
     assert all(any(w in d for d in said) for w in wanted), said
     quiet, *_ = setup(timeout_s=5)
     meet(quiet, clock, "Alessandro", V)

@@ -101,7 +101,7 @@ class Encounter:
     person_name: str = ""
     face_id: str = ""                      # the id their face opened (face_key)
     memory_key: bytes = b""                # the key to their memory; RAM only
-    frames: list = field(default_factory=list)   # frontal face vectors, RAM only
+    frames: list = field(default_factory=list)   # (as seen, light evened out) vectors, RAM only
     consent: str = ""                      # "", "asked", "yes", "no"
     to_greet: bool = False                 # recognised: greet them by name
     name_ignored: bool = False             # another name written in front of a known face
@@ -411,16 +411,22 @@ class Mind:
 
     # -- faces -------------------------------------------------------------------
     def _recognise(self, enc: Encounter):
-        """Two frontal frames that open someone's lock: that person."""
+        """Two frontal frames that open someone's lock: that person.  The two
+        as seen first; if they open nothing, the two with their light evened
+        out - on LFW, a second attempt that took the light conditions from
+        70% to 79% of pairs recognised, and lost nothing on good photos."""
         if self.faces is None or enc.face_id or len(enc.frames) < 2:
             return
-        found = self.faces.recognise(enc.frames[-2:])
-        if found is not None:
-            self._debug(f"face opened {found.name}'s lock (id {found.id}), "
-                        f"{found.errors} of 56 face bits corrected")
-            self._known(enc, found)
-            enc.to_greet = True
-        elif len(enc.frames) == 2:
+        for k, how in ((0, "as seen"), (1, "with the light evened out")):
+            pair = [f[k] for f in enc.frames[-2:]]
+            found = None if any(v is None for v in pair) else self.faces.recognise(pair)
+            if found is not None:
+                self._debug(f"face {how} opened {found.name}'s lock (id {found.id}), "
+                            f"{found.errors} of 56 face bits corrected")
+                self._known(enc, found)
+                enc.to_greet = True
+                return
+        if len(enc.frames) == 2:
             self._debug(f"face opens none of the {len(self.faces)} remembered")
 
     def _known(self, enc: Encounter, found):
@@ -478,10 +484,15 @@ class Mind:
                 enc.consent = "no"
                 self.log.append(("not answered", enc.person_name))
                 return None
-            if len(enc.frames) < 2:
+            # As seen, as the locks were measured; evened out only if the
+            # frames as seen have no face to give.
+            frames = [f[0] for f in enc.frames[-4:] if f[0] is not None]
+            if len(frames) < 2:
+                frames = [f[1] for f in enc.frames[-4:] if f[1] is not None]
+            if len(frames) < 2:
                 return say("look")
             try:
-                found = self.faces.enrol(enc.frames[-4:], enc.person_name)
+                found = self.faces.enrol(frames, enc.person_name)
             except Exception as e:           # the chip busy or gone: nothing kept
                 self.log.append(("face error", str(e)))
                 return say("failed")
@@ -593,11 +604,14 @@ class Mind:
 
     # -- per frame ----------------------------------------------------------------
     def on_frame(self, face: bool, image_b64, face_vec=None):
+        """`face_vec`: the face's vector, or (as seen, light evened out) -
+        either may be None."""
         t = self.clock()
+        seen_as, evened = face_vec if isinstance(face_vec, tuple) else (face_vec, None)
         self.last_seen = {}
         if face:
             self._stop.set()          # someone is there: the model is theirs
-        event, finished = self.tracker.observe(t, face, face_vec)
+        event, finished = self.tracker.observe(t, face, seen_as)
         if event in ("ended", "switched"):
             self._close(finished)
         if event == "hold":
@@ -607,10 +621,11 @@ class Mind:
             self._idle()                       # nobody there: time to write up
         if enc is None or not face:
             return {"action": "none"}
-        if face_vec is not None:
-            enc.frames = (enc.frames + [face_vec])[-6:]
+        has_face = seen_as is not None or evened is not None
+        if has_face:
+            enc.frames = (enc.frames + [(seen_as, evened)])[-6:]
         self._recognise(enc)
-        if self.faces is not None and face_vec is not None and len(enc.frames) == 1:
+        if self.faces is not None and has_face and len(enc.frames) == 1:
             # A face just arrived: one frame more and a known face is known.
             # Answered at once, a returning person was told "You're new here".
             return {"action": "none", "looking": True}

@@ -260,7 +260,7 @@ def _loop(a, gate, mind, t0, faces=None):
         # nobody is there, which is how an encounter ends.  No model runs then.
         img = base64.b64encode(jpeg).decode() if reason else ""
         # The face vector stays in RAM, inside the encounter; never saved.
-        vec = faces.embed(jpeg) if (faces and reason) else None
+        vec = faces.embed_both(jpeg) if (faces and reason) else None
         act = mind.on_frame(bool(reason), img, vec)
         events = mind.log[n_log:]
         for ev in events:

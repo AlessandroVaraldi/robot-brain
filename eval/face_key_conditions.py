@@ -15,6 +15,9 @@ robot hands over two frames:
   wrong       enrolled people taken for someone else (any pair)
   strangers   never-enrolled people recognised as someone (any pair)
 
+--retry LIGHT: a pair that opens nothing is tried again with the light of
+both frames evened out (face_compare.even_light), as a second attempt.
+
 Declared before running: one stop darker (a cloudy day) loses at most 5
 points of recognition against the untouched photos, and no change makes a
 stranger or the wrong person recognised.
@@ -106,13 +109,13 @@ LIGHT = ("1 stop darker", "2 stops darker", "3 stops darker", "overexposed", "lo
 
 def embed(job):
     global _fc
-    path, name, seed = job
+    path, name, seed, light = job
     if _fc is None:
         import cv2
         cv2.setNumThreads(1)          # one process per core already
         from face_compare import FaceComparer
         _fc = FaceComparer()
-    vec = _fc.analyse(changed(path, name, seed))["vec"]
+    vec = _fc.analyse(changed(path, name, seed), light)["vec"]
     return None if vec is None else np.asarray(vec, np.float32).ravel()
 
 
@@ -125,7 +128,7 @@ def frontal_people():
         return json.loads(cache.read_text())
     files = sorted((LFW / "lfw").glob("*/*.jpg"))
     with ProcessPoolExecutor(WORKERS) as ex:
-        vecs = list(ex.map(embed, [(f, "untouched", 0) for f in files], chunksize=64))
+        vecs = list(ex.map(embed, [(f, "untouched", 0, "none") for f in files], chunksize=64))
     by = {}
     for f, v in zip(files, vecs):
         if v is not None:
@@ -136,32 +139,40 @@ def frontal_people():
     return by
 
 
-def run(by, people, enrolled, strangers, conditions):
+def run(by, people, enrolled, strangers, conditions, retry="none"):
     from face_key.chip import SoftChip
     from face_key.store import FaceKeys, admin_keypair
     with tempfile.TemporaryDirectory() as tmp, ProcessPoolExecutor(WORKERS) as ex:
         keys = FaceKeys(SoftChip(key=os.urandom(32), burst=10**9), admin_keypair()[1],
                         Path(tmp) / "faces.sqlite")
         keys.REFRESH_AFTER_S = float("inf")
-        enrol = list(ex.map(embed, [(by[n][i], "untouched", 0)
+        enrol = list(ex.map(embed, [(by[n][i], "untouched", 0, "none")
                                     for n in enrolled for i in (0, 1)], chunksize=16))
         ids = {}
         for k, n in enumerate(enrolled):
             pair = [v for v in enrol[2 * k:2 * k + 2] if v is not None]
             if len(pair) == 2:
                 ids[n] = keys.enrol(pair, n).id
-        print(f"\nenrolled {len(ids)} of {len(enrolled)}, strangers {len(strangers)}")
+        print(f"\nenrolled {len(ids)} of {len(enrolled)}, strangers {len(strangers)}; "
+              f"second attempt: {retry}")
         print(f"{'condition':22} {'found':>6} {'pair':>7} {'visit':>7} {'wrong':>6} {'strangers':>10}")
         pairs = {}
         for name in conditions:
             jobs = [(by[n][i], name, zlib.crc32(f"{n}:{i}".encode()))
                     for n in people for i in range(2, min(7, len(by[n])))]
-            vecs = iter(ex.map(embed, jobs, chunksize=16))
-            probes = {n: [next(vecs) for _ in range(2, min(7, len(by[n])))] for n in people}
+            vecs = iter(ex.map(embed, [(*j, "none") for j in jobs], chunksize=16))
+            again = iter(ex.map(embed, [(*j, retry) for j in jobs], chunksize=16)
+                         if retry != "none" else [None] * len(jobs))
+            probes = {n: [(next(vecs), next(again)) for _ in range(2, min(7, len(by[n])))]
+                      for n in people}
 
             def opens(a, b):
-                return keys.recognise([a, b]) if a is not None and b is not None else None
-            found = sum(p[0] is not None and p[1] is not None for p in probes.values())
+                for x, y in ((a[0], b[0]), (a[1], b[1])):
+                    got = keys.recognise([x, y]) if x is not None and y is not None else None
+                    if got:
+                        return got
+                return None
+            found = sum(p[0][0] is not None and p[1][0] is not None for p in probes.values())
             pair = visit = wrong = accepted = 0
             for n in ids:
                 p = probes[n]
@@ -184,13 +195,16 @@ def run(by, people, enrolled, strangers, conditions):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", choices=["light"], help="untouched and the light conditions only")
+    ap.add_argument("--retry", nargs="+", default=["none"],
+                    help="second attempts to compare, each a separate run")
     a = ap.parse_args()
     conditions = ["untouched", *LIGHT] if a.only == "light" else list(CONDITIONS)
     by = frontal_people()
     people = sorted(n for n, ph in by.items() if len(ph) >= 4)
     random.Random(0).shuffle(people)
     enrolled, strangers = people[::2], people[1::2]
-    run(by, people, enrolled, strangers, conditions)
+    for retry in a.retry:
+        run(by, people, enrolled, strangers, conditions, retry)
 
 
 if __name__ == "__main__":

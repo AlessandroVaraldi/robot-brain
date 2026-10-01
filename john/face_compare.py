@@ -33,6 +33,22 @@ def yaw_of(row):
     return float(abs((no - (re_ + le) / 2) @ eyes) / d ** 2) if d else 9.9
 
 
+def even_light(img, how: str):
+    """The frame with its light evened out: "gamma" brings the mean
+    brightness to mid-grey, "clahe" evens contrast locally, "both" does one
+    then the other, "none" leaves it alone."""
+    if how in ("gamma", "both"):
+        mean = float(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).mean()) / 255.0
+        if 0.02 < mean < 0.98:
+            gamma = float(np.clip(np.log(0.5) / np.log(mean), 0.4, 2.5))
+            img = cv2.LUT(img, ((np.arange(256) / 255.0) ** gamma * 255).astype(np.uint8))
+    if how in ("clahe", "both"):
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        lab[..., 0] = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(lab[..., 0])
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    return img
+
+
 class FaceComparer:
     def __init__(self, threshold: float = 0.363, min_width: float = 60.0,
                  max_yaw: float = 0.15):
@@ -44,11 +60,13 @@ class FaceComparer:
         self.rec = cv2.FaceRecognizerSF.create(
             str(MODELS / "face_recognition_sface_2021dec.onnx"), "")
 
-    def analyse(self, jpeg: bytes) -> dict:
-        """The largest face: its width, rotation, and its vector if usable."""
+    def analyse(self, jpeg: bytes, light: str = "none") -> dict:
+        """The largest face: its width, rotation, and its vector if usable;
+        `light`: the frame's light evened out first (even_light)."""
         img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             return {"faces": 0, "vec": None, "why": "unreadable image"}
+        img = even_light(img, light)
         h, w = img.shape[:2]
         self.det.setInputSize((w, h))
         _, faces = self.det.detect(img)
@@ -67,6 +85,11 @@ class FaceComparer:
 
     def embed(self, jpeg: bytes):
         return self.analyse(jpeg)["vec"]
+
+    def embed_both(self, jpeg: bytes):
+        """(as seen, light evened out): the second for a second attempt when
+        the first opens nothing (encounters.Mind._recognise)."""
+        return self.analyse(jpeg)["vec"], self.analyse(jpeg, "both")["vec"]
 
     def score(self, a, b) -> float:
         return float(self.rec.match(a, b, cv2.FaceRecognizerSF_FR_COSINE))
